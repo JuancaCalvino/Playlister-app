@@ -6,7 +6,7 @@ import { translations, Locale } from './translations';
 type LanguageContextType = {
     language: Locale;
     setLanguage: (lang: Locale) => void;
-    t: (key: string) => string;
+    t: (key: string, params?: Record<string, string | number>) => string;
 };
 
 const LanguageContext = createContext<LanguageContextType | undefined>(undefined);
@@ -22,7 +22,7 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
         }
     }, []);
 
-    const t = (path: string) => {
+    const t = (path: string, params?: Record<string, string | number>) => {
         const keys = path.split('.');
         let current: any = translations[language];
 
@@ -34,7 +34,19 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
             current = current[key];
         }
 
-        return current as string;
+        if (Array.isArray(current)) {
+            current = current[Math.floor(Math.random() * current.length)];
+        }
+
+        let value = current as string;
+
+        if (params) {
+            Object.entries(params).forEach(([key, val]) => {
+                value = value.replace(new RegExp(`{${key}}`, 'g'), String(val));
+            });
+        }
+
+        return value;
     };
 
     return (

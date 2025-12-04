@@ -13,15 +13,31 @@ export const translations = {
                 spotifyDesc: "Save your playlists directly to your Spotify account instantly.",
                 custom: "Fully Customizable",
                 customDesc: "Edit, reorder, and refine your playlists with natural language."
+            },
+            sessionExpired: {
+                title: "Session Expired",
+                message: "Your session has expired. Please refresh to continue.",
+                refresh: "Refresh",
+                dismiss: "Dismiss"
             }
         },
         chat: {
             welcome: "Hi! I'm your AI DJ. Tell me what kind of music you're in the mood for.",
-            inputPlaceholder: "Type a vibe, artist, or genre...",
+            inputPlaceholder: "Write artists, genres, desired durations, festivals...",
             loading: {
                 searching: "Searching for songs...",
                 grouping: "Grouping songs...",
-                creating: "Creating playlist..."
+                creating: "Creating playlist...",
+                ai_generating: "Generating songs with AI...",
+                processing_batch: [
+                    "Consulting the music gods...",
+                    "Teaching the AI to dance...",
+                    "Digging through the crates...",
+                    "Convincing Spotify to be cool...",
+                    "Mixing the magic potion..."
+                ],
+                found_songs: "Found {count} unique songs...",
+                finalizing: "Finalizing playlist..."
             },
             sidebar: {
                 title: "Current Playlist",
@@ -53,7 +69,8 @@ export const translations = {
             errors: {
                 generic: "Sorry, I had trouble finding that music. Please try again.",
                 saveFailed: "Failed to save playlist",
-                sessionExpired: "Session expired. Please refresh."
+                sessionExpired: "Session expired. Please refresh.",
+                aiFailed: "The AI is having a bit of trouble. Give it another moment!"
             }
         }
     },
@@ -69,15 +86,33 @@ export const translations = {
                 spotifyDesc: "Guarda tus playlists directamente en tu cuenta de Spotify al instante.",
                 custom: "Totalmente Personalizable",
                 customDesc: "Edita, reordena y refina tus playlists con lenguaje natural."
+            },
+            sessionExpired: {
+                title: "Sesión Expirada",
+                message: "Tu sesión ha expirado. Por favor actualiza para continuar.",
+                refresh: "Actualizar",
+                dismiss: "Descartar"
             }
         },
         chat: {
             welcome: "¡Hola! Soy tu DJ IA. Dime qué tipo de música te apetece escuchar.",
-            inputPlaceholder: "Escribe una vibra, artista o género...",
+            inputPlaceholder: "Escribe artistas, géneros, duraciones deseadas, festivales...",
             loading: {
                 searching: "Buscando canciones...",
                 grouping: "Agrupando canciones...",
-                creating: "Creando playlist..."
+                creating: "Creando playlist...",
+                ai_generating: "La IA está buscando canciones...",
+                processing_batch: [
+                    "Consultando a los dioses de la música...",
+                    "Enseñándole a bailar a la IA...",
+                    "Desempolvando los discos...",
+                    "Convenciendo a Spotify...",
+                    "Preguntando en discotecas...",
+                    "Llamando a un DJ de refuerzo...",
+                    "Calculando el nivel óptimo de reverb..."
+                ],
+                found_songs: "Encontradas {count} canciones únicas...",
+                finalizing: "Finalizando playlist..."
             },
             sidebar: {
                 title: "Playlist Actual",
@@ -109,7 +144,8 @@ export const translations = {
             errors: {
                 generic: "Lo siento, tuve problemas para encontrar esa música. Por favor intenta de nuevo.",
                 saveFailed: "Error al guardar la playlist",
-                sessionExpired: "Sesión expirada. Por favor actualiza."
+                sessionExpired: "Sesión expirada. Por favor actualiza.",
+                aiFailed: "La IA está teniendo problemas. ¡Dale un momento!"
             }
         }
     }
