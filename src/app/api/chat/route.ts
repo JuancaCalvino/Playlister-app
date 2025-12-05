@@ -92,7 +92,8 @@ export async function POST(request: Request) {
                   1. 'message': A short, friendly response to the user (assuming all songs are found) IN THE USER'S LANGUAGE (${
                     language === "es" ? "Spanish" : "English"
                   }).
-                  2. 'songs': An array of song objects, each with 'title' and 'artist'. This should be the COMPLETE updated playlist (including the extra buffer songs).
+                  2. 'songs': An array of song objects, each with 'title' and 'artist'. 
+                     - CRITICAL: THIS ARRAY MUST BE 2x THE SIZE OF THE USER REQUEST. (e.g. if user wants 20, generate 40).
                      - DEPTH & VARIETY: For large specific requests (e.g. "100 Rap songs"), you MUST include MULTIPLE hits (2-5) from the genre's KEY artists. 
                      - Example: For "Spanish Rap", include 3-4 songs each by Nach, SFDK, Kase.O, Violadores del Verso, etc. Don't just pick one.
                      - Ensure the list feels "Curated" and "Complete" for that genre.
@@ -154,10 +155,35 @@ export async function POST(request: Request) {
         send({ type: "status", key: "chat.loading.ai_generating" });
 
         // 1. Analyze request for quantity to inject explicit instruction
-        const countMatch = message.match(
-          /(\d+)\s*(songs|canciones|temas|pistas)/i
+        // Check for Duration (Hours/Minutes) first
+        const hourMatch = message.match(
+          /(\d+(?:\.\d+)?)\s*(?:hours?|horas?|hrs?)/i
         );
-        let requestedCount = countMatch ? parseInt(countMatch[1]) : 15;
+        const minMatch = message.match(/(\d+)\s*(?:minutes?|minutos?|mins?)/i);
+
+        let requestedCount = 15; // Default
+
+        if (hourMatch) {
+          const hours = parseFloat(hourMatch[1]);
+          requestedCount = Math.ceil((hours * 60) / 3.5); // ~3.5 mins per song
+          console.log(
+            `Detected duration request: ${hours} hours -> ${requestedCount} songs`
+          );
+        } else if (minMatch) {
+          const mins = parseInt(minMatch[1]);
+          requestedCount = Math.ceil(mins / 3.5);
+          console.log(
+            `Detected duration request: ${mins} mins -> ${requestedCount} songs`
+          );
+        } else {
+          // Check for explicit song count
+          const countMatch = message.match(
+            /(\d+)\s*(songs?|tracks?|canciones|temas|pistas|m[uú]sicas?)/i
+          );
+          if (countMatch) {
+            requestedCount = parseInt(countMatch[1]);
+          }
+        }
         // Cap reasonably to avoid context limits
         if (requestedCount > 100) requestedCount = 100;
 
@@ -168,16 +194,18 @@ export async function POST(request: Request) {
 
         const completion = await openai.chat.completions.create({
           model: "gpt-4o",
-          temperature: 0.7, // Increased for variety and to prevent loop/placeholders
+          temperature: 0.7,
           messages: [
             {
               role: "system",
-              content: systemPrompt,
+              content:
+                systemPrompt +
+                `\n\nCRITICAL: User requested ${requestedCount} songs. You MUST generate a list of ${targetGenCount} songs. Do not be lazy. Fill the array.`,
             },
             { role: "user", content: enforcedMessage },
           ],
           response_format: { type: "json_object" },
-          max_tokens: 16384, // Restore high limit for large playlists (required for 3x buffer)
+          max_tokens: 16384,
           frequency_penalty: 0.2,
         });
 
@@ -298,89 +326,105 @@ export async function POST(request: Request) {
           const batch = aiResponse.songs.slice(i, i + BATCH_SIZE);
           console.log(`Processing batch ${currentBatch}/${totalBatches}`);
 
-          const batchPromises = batch.map(
-            async (song: { title: string; artist: string }) => {
-              try {
-                // Collect potential candidates
-                let candidates: any[] = [];
+          // Process batch in chunks to avoid Rate Limiting (429)
+          const CHUNK_SIZE = 5;
+          const processedResults: any[] = [];
 
-                // 1. Standard search (Exact Title + Artist)
-                let query = `track:${song.title} artist:${song.artist}`;
-                let searchResult = await searchWithRetry(query, 1);
-                if (searchResult.body.tracks?.items?.length)
-                  candidates.push(...searchResult.body.tracks.items);
+          for (let j = 0; j < batch.length; j += CHUNK_SIZE) {
+            const chunk = batch.slice(j, j + CHUNK_SIZE);
+            const chunkPromises = chunk.map(
+              async (song: { title: string; artist: string }) => {
+                try {
+                  // Collect potential candidates
+                  let candidates: any[] = [];
 
-                // 2. Fallback: Primary Artist
-                if (
-                  candidates.length === 0 &&
-                  (song.artist.includes("&") ||
-                    song.artist.includes(",") ||
-                    song.artist.toLowerCase().includes("feat"))
-                ) {
-                  const primaryArtist = song.artist
-                    .split(/,|&|feat\.|ft\./i)[0]
+                  // 1. Standard search (Exact Title + Artist)
+                  let query = `track:${song.title} artist:${song.artist}`;
+                  let searchResult = await searchWithRetry(query, 1);
+                  if (searchResult.body.tracks?.items?.length)
+                    candidates.push(...searchResult.body.tracks.items);
+
+                  // 2. Fallback: Primary Artist
+                  if (
+                    candidates.length === 0 &&
+                    (song.artist.includes("&") ||
+                      song.artist.includes(",") ||
+                      song.artist.toLowerCase().includes("feat"))
+                  ) {
+                    const primaryArtist = song.artist
+                      .split(/,|&|feat\.|ft\./i)[0]
+                      .trim();
+                    query = `track:${song.title} artist:${primaryArtist}`;
+                    searchResult = await searchWithRetry(query, 1);
+                    if (searchResult.body.tracks?.items?.length)
+                      candidates.push(...searchResult.body.tracks.items);
+                  }
+
+                  // 3. Fallback: Title + Genre
+                  if (candidates.length === 0 && aiResponse.strict_genre) {
+                    query = `${song.title} ${aiResponse.strict_genre}`;
+                    searchResult = await searchWithRetry(query, 1);
+                    if (searchResult.body.tracks?.items?.length)
+                      candidates.push(...searchResult.body.tracks.items);
+                  }
+
+                  // 4. Fallback: Sanitized Title (Remove "The", "A", metadata) + Artist
+                  let sanitizedTitle = song.title
+                    .replace(/^(The|A|An)\s+/i, "")
+                    .replace(/\s*[\(\[\-].*$/i, "")
                     .trim();
-                  query = `track:${song.title} artist:${primaryArtist}`;
-                  searchResult = await searchWithRetry(query, 1);
-                  if (searchResult.body.tracks?.items?.length)
-                    candidates.push(...searchResult.body.tracks.items);
-                }
+                  if (
+                    candidates.length === 0 &&
+                    sanitizedTitle &&
+                    sanitizedTitle.length > 2 &&
+                    sanitizedTitle !== song.title
+                  ) {
+                    console.log(
+                      `Sanitized search: "${sanitizedTitle}" by ${song.artist}`
+                    );
+                    query = `track:${sanitizedTitle} artist:${song.artist}`;
+                    searchResult = await searchWithRetry(query, 1);
+                    if (searchResult.body.tracks?.items?.length)
+                      candidates.push(...searchResult.body.tracks.items);
+                  }
 
-                // 3. Fallback: Title + Genre
-                if (candidates.length === 0 && aiResponse.strict_genre) {
-                  query = `${song.title} ${aiResponse.strict_genre}`;
-                  searchResult = await searchWithRetry(query, 1);
-                  if (searchResult.body.tracks?.items?.length)
-                    candidates.push(...searchResult.body.tracks.items);
-                }
+                  // 5. Fallback: Broad Title Search (finding similar artists)
+                  if (candidates.length === 0) {
+                    console.log(
+                      `Deep search for ${song.title} (checking similar artists)...`
+                    );
+                    query = `track:${song.title}`;
+                    if (sanitizedTitle !== song.title)
+                      query = `track:${sanitizedTitle}`;
+                    searchResult = await searchWithRetry(query, 5);
+                    if (searchResult.body.tracks?.items?.length)
+                      candidates.push(...searchResult.body.tracks.items);
+                  }
 
-                // 4. Fallback: Sanitized Title (Remove "The", "A", metadata) + Artist
-                let sanitizedTitle = song.title
-                  .replace(/^(The|A|An)\s+/i, "")
-                  .replace(/\s*[\(\[\-].*$/i, "")
-                  .trim();
-                if (
-                  candidates.length === 0 &&
-                  sanitizedTitle &&
-                  sanitizedTitle.length > 2 &&
-                  sanitizedTitle !== song.title
-                ) {
-                  console.log(
-                    `Sanitized search: "${sanitizedTitle}" by ${song.artist}`
+                  return { requested: song, candidates };
+                } catch (e: any) {
+                  console.error(
+                    `Failed to search for ${song.title}`,
+                    e.message
                   );
-                  query = `track:${sanitizedTitle} artist:${song.artist}`;
-                  searchResult = await searchWithRetry(query, 1);
-                  if (searchResult.body.tracks?.items?.length)
-                    candidates.push(...searchResult.body.tracks.items);
+                  return { requested: song, candidates: [] };
                 }
-
-                // 5. Fallback: Broad Title Search (finding similar artists)
-                if (candidates.length === 0) {
-                  console.log(
-                    `Deep search for ${song.title} (checking similar artists)...`
-                  );
-                  query = `track:${song.title}`;
-                  if (sanitizedTitle !== song.title)
-                    query = `track:${sanitizedTitle}`;
-                  searchResult = await searchWithRetry(query, 5);
-                  if (searchResult.body.tracks?.items?.length)
-                    candidates.push(...searchResult.body.tracks.items);
-                }
-
-                return { requested: song, candidates };
-              } catch (e: any) {
-                console.error(`Failed to search for ${song.title}`, e.message);
-                return { requested: song, candidates: [] };
               }
-            }
-          );
+            );
 
-          // Resolve batch
-          const results = await Promise.all(batchPromises);
+            const chunkResults = await Promise.all(chunkPromises);
+            processedResults.push(...chunkResults);
+
+            // Small delay between chunks
+            await new Promise((r) => setTimeout(r, 200));
+          }
+
+          // Use the processed results
+          const batchPromises = processedResults;
 
           // Collect ALL Artist IDs for batch fetching
           const allArtistIds = new Set<string>();
-          results.forEach((res) => {
+          batchPromises.forEach((res) => {
             res.candidates.forEach((c: any) => {
               if (c.artists && c.artists[0]?.id)
                 allArtistIds.add(c.artists[0].id);
@@ -406,7 +450,7 @@ export async function POST(request: Request) {
           }
 
           // Validate and Select Best Candidate PER REQUEST
-          results.forEach(({ requested, candidates }) => {
+          batchPromises.forEach(({ requested, candidates }: any) => {
             if (!candidates || candidates.length === 0) {
               console.log(
                 `Could not find track: ${requested.title} by ${requested.artist}`
@@ -424,11 +468,13 @@ export async function POST(request: Request) {
               // 1. Check Genre
               let genreMatch = true;
               if (effectiveGenre && artist) {
-                const normalize = (str: string) =>
-                  str
+                const normalize = (str: any) => {
+                  if (typeof str !== "string") return "";
+                  return str
                     .normalize("NFD")
                     .replace(/[\u0300-\u036f]/g, "")
                     .toLowerCase();
+                };
                 const requestGenre = normalize(effectiveGenre); // Use effectiveGenre
                 // Check artist genres
                 const hasGenre = artist.genres.some((g: string) => {
@@ -443,8 +489,10 @@ export async function POST(request: Request) {
               }
 
               // 2. Check Artist Similarity (Fuzzy)
-              const normalize = (str: string) =>
-                str.toLowerCase().replace(/[^a-z0-9]/g, "");
+              const normalize = (str: any) =>
+                typeof str === "string"
+                  ? str.toLowerCase().replace(/[^a-z0-9]/g, "")
+                  : "";
               const reqArtist = normalize(requested.artist);
               const trackArtist = normalize(track.artists[0].name);
               const artistSimilarity =
@@ -456,11 +504,16 @@ export async function POST(request: Request) {
               const trackTitle = normalize(track.name);
               const titleMatch = reqTitle === trackTitle;
 
+              // 4. Relaxed Title Match (Substring) - Useful if Spotify has "Song (Remix)" vs "Song"
+              const titleMatchRelaxed =
+                trackTitle.includes(reqTitle) || reqTitle.includes(trackTitle);
+
               return {
                 track,
                 genreMatch,
                 artistSimilarity,
                 titleMatch,
+                titleMatchRelaxed,
                 artist,
               };
             });
@@ -477,25 +530,41 @@ export async function POST(request: Request) {
 
               if (genreMatches.length > 0) {
                 // Pick best among genre matches:
-                // 1. Artist Match
-                // 2. Exact Title Match (if Artist failed, e.g. wrong artist attributed)
                 bestMatch =
                   genreMatches.find((c: any) => c.artistSimilarity) ||
                   genreMatches.find((c: any) => c.titleMatch) ||
                   genreMatches[0];
               } else {
-                // If NO genre match, but we have an Exact Artist Match + Exact Title Match, it's probably the right song and Spotify just lacks genre tags for that artist.
+                // If NO genre match, try to save it:
+                // 1. Perfect Match (Artist + Exact Title) - High confidence AI was right, Spotify tags missing.
+                // 2. Artist Match + Relaxed Title (e.g. Remix) - Good confidence.
+                // 3. Artist has NO genres - Benefit of doubt.
+
                 const perfectMatch = validCandidates.find(
-                  (c: any) => c.artistSimilarity && c.titleMatch
+                  (c: any) =>
+                    c.artistSimilarity && (c.titleMatch || c.titleMatchRelaxed)
                 );
+
+                const emptyGenreCandidate = validCandidates.find(
+                  (c: any) =>
+                    c.artistSimilarity &&
+                    c.artist &&
+                    (!c.artist.genres || c.artist.genres.length === 0)
+                );
+
                 if (perfectMatch) {
                   console.log(
-                    `Genre mismatch for ${requested.title} but found Perfect Match (Artist+Title). Accepting.`
+                    `Genre mismatch for ${requested.title} but found Strong Match (Artist+Title). Accepting.`
                   );
                   bestMatch = perfectMatch;
+                } else if (emptyGenreCandidate) {
+                  console.log(
+                    `Genre mismatch for ${requested.title} but Artist has NO genres. Giving benefit of doubt.`
+                  );
+                  bestMatch = emptyGenreCandidate;
                 } else {
                   console.log(
-                    `Filtered out ${requested.title}: No candidates matched genre '${effectiveGenre}'`
+                    `Filtered out ${requested.title}: No candidates matched genre '${effectiveGenre}' and no strong fallback found.`
                   );
                 }
               }
@@ -527,11 +596,13 @@ export async function POST(request: Request) {
             if (bestMatch) {
               const track = bestMatch.track;
               // Check for duplicates in CURRENT playlist
-              const normalize = (str: string) =>
-                str
-                  .toLowerCase()
-                  .replace(/[^a-z0-9]/g, "")
-                  .trim();
+              const normalize = (str: any) =>
+                typeof str === "string"
+                  ? str
+                      .toLowerCase()
+                      .replace(/[^a-z0-9]/g, "")
+                      .trim()
+                  : "";
               const isDuplicateInCurrent = currentPlaylist?.some((p: any) => {
                 if (p.id === track.id || p.uri === track.uri) return true;
                 if (p.title && p.artist) {
