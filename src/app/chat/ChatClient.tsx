@@ -5,6 +5,7 @@ import { Send, Music, Loader2, Play, Plus, X, Trash2, GripVertical, RefreshCw, S
 import { cn } from "@/lib/utils";
 import { Reorder } from "framer-motion";
 import { useLanguage } from "@/lib/i18n/context";
+import { Locale } from "@/lib/i18n/translations";
 
 type Message = {
     role: "user" | "assistant";
@@ -619,18 +620,18 @@ export default function ChatClient() {
                         {isLanguageOpen && (
                             <>
                                 <div className="absolute right-0 top-full mt-2 w-40 bg-neutral-800 rounded-xl shadow-xl border border-neutral-700 overflow-hidden z-50 animate-in fade-in zoom-in-95 duration-200">
-                                    {[
+                                    {([
                                         { code: 'en', label: 'English' },
                                         { code: 'es', label: 'Español' },
                                         { code: 'fr', label: 'Français' },
                                         { code: 'de', label: 'Deutsch' },
                                         { code: 'it', label: 'Italiano' },
                                         { code: 'pt', label: 'Português' },
-                                    ].map((lang) => (
+                                    ] as { code: Locale, label: string }[]).map((lang) => (
                                         <button
                                             key={lang.code}
                                             onClick={() => {
-                                                setLanguage(lang.code as any);
+                                                setLanguage(lang.code);
                                                 setIsLanguageOpen(false);
                                             }}
                                             className={cn(

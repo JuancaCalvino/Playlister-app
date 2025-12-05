@@ -54,7 +54,11 @@ export async function POST(request: Request) {
                       ? JSON.stringify(
                           currentPlaylist
                             .map(
-                              (t: any) => `${t.name || t.title} - ${t.artist}`
+                              (t: {
+                                name?: string;
+                                title?: string;
+                                artist: string;
+                              }) => `${t.name || t.title} - ${t.artist}`
                             )
                             .slice(-100)
                         )
