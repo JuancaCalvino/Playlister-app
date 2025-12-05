@@ -247,7 +247,14 @@ export default function ChatClient() {
                 body: JSON.stringify({
                     message: userMessage, // Send the latest user message as 'message'
                     messages: newMessages,
-                    currentPlaylist: currentPlaylist.map(t => ({ title: t.name, artist: t.artist })),
+                    currentPlaylist: currentPlaylist.map(t => ({
+                        id: t.id,
+                        name: t.name, // Send as 'name' to match backend type
+                        artist: t.artist,
+                        uri: t.uri,
+                        image: t.image,
+                        album: t.album
+                    })),
                     language, // Pass current language to API
                     previouslyRejected: Array.from(rejectedSongs), // Send rejected songs
                     context: currentContext // Send previous context (topic/genre)
