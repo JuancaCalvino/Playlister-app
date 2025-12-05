@@ -16,9 +16,10 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
 
     useEffect(() => {
         // Auto-detect browser language
-        const browserLang = navigator.language.split('-')[0];
-        if (browserLang === 'es') {
-            setLanguage('es');
+        const browserLang = navigator.language.split('-')[0] as Locale;
+        // Check if the language exists in our translations
+        if (Object.keys(translations).includes(browserLang)) {
+            setLanguage(browserLang);
         }
     }, []);
 

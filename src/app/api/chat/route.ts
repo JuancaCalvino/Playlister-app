@@ -85,32 +85,20 @@ export async function POST(request: Request) {
                   7. RANDOMNESS: Randomize the order of the songs. Do NOT output them in popularity order.
                   
                   You must return a JSON object with EIGHT fields:
-                  ...
-                // 1. Ask OpenAI to generate a list of songs based on the user's prompt
-                const completion = await openai.chat.completions.create({
-                    model: "gpt-4o",
-                    temperature: 0.8, // High temperature for "aleatory" / random results (User request)
-                    messages: [
-                        {
-                            role: "system",
-                            content: systemPrompt,
-                        },
-                        { role: "user", content: message },
-                    ],
-                    response_format: { type: "json_object" },
-                    max_tokens: 16384, 
-                    frequency_penalty: 0.2, 
-                });
                   1. 'message': A short, friendly response to the user (assuming all songs are found) IN THE USER'S LANGUAGE (${
                     language === "es" ? "Spanish" : "English"
                   }).
                   2. 'songs': An array of song objects, each with 'title' and 'artist'. This should be the COMPLETE updated playlist (including the extra buffer songs).
+                     - DEPTH & VARIETY: For large specific requests (e.g. "100 Rap songs"), you MUST include MULTIPLE hits (2-5) from the genre's KEY artists. 
+                     - Example: For "Spanish Rap", include 3-4 songs each by Nach, SFDK, Kase.O, Violadores del Verso, etc. Don't just pick one.
+                     - Ensure the list feels "Curated" and "Complete" for that genre.
                   3. 'topic': A short string describing the playlist content (e.g. "Lady Gaga", "Techno", "90s Rock").
                      - CRITICAL: If the user says "add more", "similar", or "continue", USE THE PREVIOUS CONTEXT TOPIC even if they add extra words like "2 hours".
                      - CRITICAL: Do NOT use "Time", "Hours", or "Minutes" as the topic unless the user explicitly asks for songs ABOUT time.
-                     - If the user says "2 hours of Reggaeton", the topic is 'Reggaeton', NOT 'Time'. 
-                     - If the user says "Add 2 hours", and previous context was 'Hardstyle', the topic is 'Hardstyle'.
-                  4. 'target_count': The integer number of songs the user EXPLICITLY requested. If they didn't specify, use 15.
+                     - INTELLIGENT TYPO HANDLING: If user says "por", assume they meant "POP", do the same for other typos.
+                     - CONTEXT MERGING: If user corrects a previous request (e.g. "I meant classic pop"), MERGE it with previous context (e.g. "Spanish") -> "Classic Spanish Pop".
+                  4. 'target_count': The integer number of songs the user EXPLICITLY requested. 
+                     - PERSISTENCE: If the user corrects a previous request but doesn't mention a new number, USE THE PREVIOUS TARGET COUNT (e.g. 100).
                   5. 'partial_success_format': A NATURAL, VARIED sentence in the USER'S LANGUAGE (${
                     language === "es" ? "Spanish" : "English"
                   }) to report that fewer songs were found than requested. 
@@ -161,16 +149,28 @@ export async function POST(request: Request) {
 
         send({ type: "status", key: "chat.loading.ai_generating" });
 
-        // 1. Ask OpenAI to generate a list of songs based on the user's prompt
+        // 1. Analyze request for quantity to inject explicit instruction
+        const countMatch = message.match(
+          /(\d+)\s*(songs|canciones|temas|pistas)/i
+        );
+        let requestedCount = countMatch ? parseInt(countMatch[1]) : 15;
+        // Cap reasonably to avoid context limits
+        if (requestedCount > 100) requestedCount = 100;
+
+        const bufferMultiplier = requestedCount >= 50 ? 1.3 : 2; // Reduced to 1.3x for large lists to prevent JSON degradation
+        const targetGenCount = Math.ceil(requestedCount * bufferMultiplier);
+
+        const enforcedMessage = `${message} (IMPORTANT SYSTEM INSTRUCTION: User wants ${requestedCount} songs. You MUST generate exactly ${targetGenCount} unique songs in the JSON to allow for filtering. Do NOT stop early. Generate ${targetGenCount} items.)`;
+
         const completion = await openai.chat.completions.create({
           model: "gpt-4o",
-          temperature: 0.2, // Balanced creativity
+          temperature: 0.7, // Increased for variety and to prevent loop/placeholders
           messages: [
             {
               role: "system",
               content: systemPrompt,
             },
-            { role: "user", content: message },
+            { role: "user", content: enforcedMessage },
           ],
           response_format: { type: "json_object" },
           max_tokens: 16384, // Restore high limit for large playlists (required for 3x buffer)
@@ -199,7 +199,19 @@ export async function POST(request: Request) {
           throw new Error("Invalid AI response format");
         }
 
-        console.log(`AI generated ${aiResponse.songs.length} songs`);
+        // SANITIZE: Remove malformed entries (missing title/artist) which happen if AI gets "tired"
+        aiResponse.songs = aiResponse.songs.filter(
+          (s: any) =>
+            s &&
+            typeof s.title === "string" &&
+            typeof s.artist === "string" &&
+            s.title.length > 0 &&
+            s.artist.length > 0
+        );
+
+        console.log(
+          `AI generated ${aiResponse.songs.length} VALID songs (Target: ${targetGenCount})`
+        );
         if (aiResponse.strict_genre) {
           console.log(
             `Applying strict genre filter: ${aiResponse.strict_genre} `
@@ -304,9 +316,6 @@ export async function POST(request: Request) {
                   const primaryArtist = song.artist
                     .split(/,|&|feat\.|ft\./i)[0]
                     .trim();
-                  console.log(
-                    `Standard search failed for ${song.title}, trying primary artist: ${primaryArtist}`
-                  );
                   query = `track:${song.title} artist:${primaryArtist}`;
                   searchResult = await searchWithRetry(query, 1);
                   if (searchResult.body.tracks?.items?.length)
@@ -315,23 +324,17 @@ export async function POST(request: Request) {
 
                 // 3. Fallback: Title + Genre
                 if (candidates.length === 0 && aiResponse.strict_genre) {
-                  console.log(
-                    `Artist search failed for ${song.title}, trying Title + Genre: ${aiResponse.strict_genre}`
-                  );
                   query = `${song.title} ${aiResponse.strict_genre}`;
                   searchResult = await searchWithRetry(query, 1);
                   if (searchResult.body.tracks?.items?.length)
                     candidates.push(...searchResult.body.tracks.items);
                 }
 
-                // 4. Fallback: Sanitized Title (Remove "The", "A", and metadata like " - Original Mix")
-                // Catches "The Code of the Warrior" -> "Code of the Warrior"
-                // Catches "Reignite - Original Mix" -> "Reignite"
-                let sanitizedTitle = song.title.replace(/^(The|A|An)\s+/i, "");
-                sanitizedTitle = sanitizedTitle
+                // 4. Fallback: Sanitized Title (Remove "The", "A", metadata) + Artist
+                let sanitizedTitle = song.title
+                  .replace(/^(The|A|An)\s+/i, "")
                   .replace(/\s*[\(\[\-].*$/i, "")
                   .trim();
-
                 if (
                   candidates.length === 0 &&
                   sanitizedTitle &&
@@ -347,150 +350,211 @@ export async function POST(request: Request) {
                     candidates.push(...searchResult.body.tracks.items);
                 }
 
-                // 5. Fallback (NEW): Broad Title Search (finding similar artists)
+                // 5. Fallback: Broad Title Search (finding similar artists)
                 if (candidates.length === 0) {
                   console.log(
                     `Deep search for ${song.title} (checking similar artists)...`
                   );
                   query = `track:${song.title}`;
-
-                  // Also try sanitized broad search if needed
-                  if (sanitizedTitle !== song.title) {
+                  if (sanitizedTitle !== song.title)
                     query = `track:${sanitizedTitle}`;
-                  }
-
-                  searchResult = await searchWithRetry(query, 5); // Fetch top 5 candidates
+                  searchResult = await searchWithRetry(query, 5);
                   if (searchResult.body.tracks?.items?.length)
                     candidates.push(...searchResult.body.tracks.items);
                 }
 
-                if (candidates.length > 0) {
-                  // Map ALL candidates to our format
-                  const processedCandidates = candidates
-                    .map((track) => {
-                      // Check for duplicates in CURRENT playlist
-                      const normalize = (str: string) =>
-                        str
-                          .toLowerCase()
-                          .replace(/[^a-z0-9]/g, "")
-                          .trim();
-
-                      const isDuplicateInCurrent = currentPlaylist?.some(
-                        (p: any) => {
-                          if (p.id === track.id || p.uri === track.uri)
-                            return true;
-                          if (p.title && p.artist) {
-                            const t1 = normalize(p.title);
-                            const t2 = normalize(track.name);
-                            const a1 = normalize(p.artist);
-                            const a2 = normalize(track.artists[0].name);
-                            return t1 === t2 && a1 === a2;
-                          }
-                          return false;
-                        }
-                      );
-
-                      if (isDuplicateInCurrent) {
-                        // console.log(`Skipping duplicate cand: ${track.name}`); // noisy
-                        return null;
-                      }
-
-                      return {
-                        id: track.id,
-                        name: track.name,
-                        artist: track.artists[0].name,
-                        artistId: track.artists[0].id,
-                        album: track.album.name,
-                        uri: track.uri,
-                        image: track.album.images[0]?.url,
-                      };
-                    })
-                    .filter((t) => t !== null);
-
-                  if (processedCandidates.length > 0)
-                    return processedCandidates;
-                }
-
-                console.log(
-                  `Could not find track: ${song.title} by ${song.artist}`
-                );
-                rejectedSongs.push(`${song.title} - ${song.artist}`);
-                return [];
+                return { requested: song, candidates };
               } catch (e: any) {
-                if (e.statusCode === 429) {
-                  console.warn(`Rate limit hit for ${song.title}. Waiting...`);
-                  await new Promise((resolve) => setTimeout(resolve, 1000));
-                }
                 console.error(`Failed to search for ${song.title}`, e.message);
-                rejectedSongs.push(`${song.title} - ${song.artist}`);
-                return [];
+                return { requested: song, candidates: [] };
               }
             }
           );
 
-          // Flatten results because now we return arrays of candidates
-          const batchResults = (await Promise.all(batchPromises)).flat();
+          // Resolve batch
+          const results = await Promise.all(batchPromises);
 
-          // STRICT GENRE CHECK: Validate against Artist's genres OR Reference Playlist
-          if (aiResponse.strict_genre && batchResults.length > 0) {
+          // Collect ALL Artist IDs for batch fetching
+          const allArtistIds = new Set<string>();
+          results.forEach((res) => {
+            res.candidates.forEach((c: any) => {
+              if (c.artists && c.artists[0]?.id)
+                allArtistIds.add(c.artists[0].id);
+            });
+          });
+
+          // Batch Fetch Artists (Max 50)
+          let artistMap = new Map<string, any>();
+          if (allArtistIds.size > 0) {
             try {
-              // Fetch artist details for all found tracks
-              const artistIds = batchResults.map((t) => t.artistId);
-              // getArtists allows max 50 IDs, we have max 5 here.
-              const artistsResponse = await spotifyApi.getArtists(artistIds);
-              const artists = artistsResponse.body.artists;
+              const ids = Array.from(allArtistIds);
+              // Spotify limits getArtists to 50. Chunk it.
+              for (let k = 0; k < ids.length; k += 50) {
+                const chunk = ids.slice(k, k + 50);
+                const artistsResponse = await spotifyApi.getArtists(chunk);
+                artistsResponse.body.artists.forEach((a) =>
+                  artistMap.set(a.id, a)
+                );
+              }
+            } catch (e) {
+              console.error("Failed to fetch artist details", e);
+            }
+          }
 
-              // Filter tracks where the artist has the requested genre
-              const validTracks = batchResults.filter((track, index) => {
-                // 1. Check Reference Playlist (Most reliable for specific songs)
-                if (referenceTrackIds.has(track.id)) {
-                  console.log(
-                    `Validated ${track.name} via Reference Playlist!`
-                  );
-                  return true;
-                }
+          // Validate and Select Best Candidate PER REQUEST
+          results.forEach(({ requested, candidates }) => {
+            if (!candidates || candidates.length === 0) {
+              console.log(
+                `Could not find track: ${requested.title} by ${requested.artist}`
+              );
+              rejectedSongs.push(`${requested.title} - ${requested.artist}`);
+              return;
+            }
 
-                // 2. Check Artist Genres
-                const artist = artists[index];
-                if (!artist) return false;
+            // FALLBACK: Use topic if strict_genre is missing to ensure we always filter by something relevant
+            const effectiveGenre = aiResponse.strict_genre || aiResponse.topic;
 
-                // Check if ANY of the artist's genres include the strict genre string OR vice versa
+            let validCandidates = candidates.map((track: any) => {
+              const artist = artistMap.get(track.artists[0].id);
+
+              // 1. Check Genre
+              let genreMatch = true;
+              if (effectiveGenre && artist) {
                 const normalize = (str: string) =>
                   str
                     .normalize("NFD")
                     .replace(/[\u0300-\u036f]/g, "")
                     .toLowerCase();
-                const requestGenre = normalize(aiResponse.strict_genre);
-
-                const hasGenre = artist.genres.some((g) => {
+                const requestGenre = normalize(effectiveGenre); // Use effectiveGenre
+                // Check artist genres
+                const hasGenre = artist.genres.some((g: string) => {
                   const artistGenre = normalize(g);
                   return (
                     artistGenre.includes(requestGenre) ||
                     requestGenre.includes(artistGenre)
                   );
                 });
+                // Allow if genre matches OR if it's "Spanish" (generic) and artist has explicit match
+                genreMatch = hasGenre;
+              }
 
-                if (!hasGenre) {
+              // 2. Check Artist Similarity (Fuzzy)
+              const normalize = (str: string) =>
+                str.toLowerCase().replace(/[^a-z0-9]/g, "");
+              const reqArtist = normalize(requested.artist);
+              const trackArtist = normalize(track.artists[0].name);
+              const artistSimilarity =
+                reqArtist.includes(trackArtist) ||
+                trackArtist.includes(reqArtist);
+
+              // 3. Check Exact Title Match (Normalized)
+              const reqTitle = normalize(requested.title);
+              const trackTitle = normalize(track.name);
+              const titleMatch = reqTitle === trackTitle;
+
+              return {
+                track,
+                genreMatch,
+                artistSimilarity,
+                titleMatch,
+                artist,
+              };
+            });
+
+            // FILTER Logic
+            let bestMatch = null;
+
+            // Priority 1: Genre Match AND (Artist Match OR Title Match)
+            // If we have a genre match, we trust it more.
+            if (effectiveGenre) {
+              const genreMatches = validCandidates.filter(
+                (c: any) => c.genreMatch || referenceTrackIds.has(c.track.id)
+              );
+
+              if (genreMatches.length > 0) {
+                // Pick best among genre matches:
+                // 1. Artist Match
+                // 2. Exact Title Match (if Artist failed, e.g. wrong artist attributed)
+                bestMatch =
+                  genreMatches.find((c: any) => c.artistSimilarity) ||
+                  genreMatches.find((c: any) => c.titleMatch) ||
+                  genreMatches[0];
+              } else {
+                // If NO genre match, but we have an Exact Artist Match + Exact Title Match, it's probably the right song and Spotify just lacks genre tags for that artist.
+                const perfectMatch = validCandidates.find(
+                  (c: any) => c.artistSimilarity && c.titleMatch
+                );
+                if (perfectMatch) {
                   console.log(
-                    `Filtered out ${track.name} by ${
-                      track.artist
-                    }: Artist genres [${artist.genres.join(
-                      ", "
-                    )}] do not match '${aiResponse.strict_genre}'`
+                    `Genre mismatch for ${requested.title} but found Perfect Match (Artist+Title). Accepting.`
                   );
-                  rejectedSongs.push(`${track.name} - ${track.artist}`);
+                  bestMatch = perfectMatch;
+                } else {
+                  console.log(
+                    `Filtered out ${requested.title}: No candidates matched genre '${effectiveGenre}'`
+                  );
                 }
-                return hasGenre;
+              }
+            } else {
+              // If No Genre Context at all: Require Artist Match OR (Exact Title Match and High Popularity - implicitly first result)
+              const artistMatches = validCandidates.filter(
+                (c: any) => c.artistSimilarity
+              );
+              if (artistMatches.length > 0) {
+                bestMatch = artistMatches[0];
+              } else {
+                // Fallback: Exact Title Match if artist didn't match (AI hallucinated artist)
+                const titleMatches = validCandidates.filter(
+                  (c: any) => c.titleMatch
+                );
+                if (titleMatches.length > 0) {
+                  console.log(
+                    `Artist mismatch for ${requested.title} (Req: ${requested.artist}), accepting Exact Title Match.`
+                  );
+                  bestMatch = titleMatches[0];
+                } else {
+                  console.log(
+                    `Filtered out ${requested.title}: No candidates matched artist '${requested.artist}'`
+                  );
+                }
+              }
+            }
+
+            if (bestMatch) {
+              const track = bestMatch.track;
+              // Check for duplicates in CURRENT playlist
+              const normalize = (str: string) =>
+                str
+                  .toLowerCase()
+                  .replace(/[^a-z0-9]/g, "")
+                  .trim();
+              const isDuplicateInCurrent = currentPlaylist?.some((p: any) => {
+                if (p.id === track.id || p.uri === track.uri) return true;
+                if (p.title && p.artist) {
+                  const t1 = normalize(p.title);
+                  const t2 = normalize(track.name);
+                  const a1 = normalize(p.artist);
+                  const a2 = normalize(track.artists[0].name);
+                  return t1 === t2 && a1 === a2;
+                }
+                return false;
               });
 
-              foundTracksRaw.push(...validTracks);
-            } catch (e) {
-              console.error("Failed to validate artist genres", e);
-              foundTracksRaw.push(...batchResults);
+              if (!isDuplicateInCurrent) {
+                foundTracksRaw.push({
+                  id: track.id,
+                  name: track.name,
+                  artist: track.artists[0].name,
+                  artistId: track.artists[0].id,
+                  album: track.album.name,
+                  uri: track.uri,
+                  image: track.album.images[0]?.url,
+                });
+              }
+            } else {
+              rejectedSongs.push(`${requested.title} - ${requested.artist}`);
             }
-          } else {
-            foundTracksRaw.push(...batchResults);
-          }
+          });
 
           // Send rejected songs update
           if (rejectedSongs.length > 0) {
