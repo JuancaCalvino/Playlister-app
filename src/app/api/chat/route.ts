@@ -128,11 +128,19 @@ export async function POST(request: Request) {
                      - INCORRECT: "Aquí tienes 30 canciones de techno."
                      - INCORRECT: "Disfruta de estas nuevas canciones." (Do not use "nuevas" unless asked)
                      - CORRECT: "Aquí tienes {added_count} canciones más de techno."
-                  7. 'strict_genre': (Optional) If the user explicitly requested a specific genre (e.g. "Techno", "Rock", "Jazz"), include it here as a single string. If not, leave it null.
-                  8. 'action': (Required) One of "create" (new playlist), "add" (append songs), or "modify" (change/remove songs).
+                  7. 'strict_genre': (Optional) If the user explicitly requested a specific genre, include it here.
+                     - CRITICAL: MUST be a single, standard Spotify genre (e.g. "Reggaeton", "Pop", "Rock"). 
+                     - CRITICAL: Do NOT include descriptive words like "para perrear", "80s", "Classic". Put those in 'playlist_keywords'.
+                     - INCORRECT: "Reggaeton para perrear en la discoteca"
+                     - CORRECT: "Reggaeton"
+                  8. 'playlist_keywords': (Optional) A list of strings to search for REFERENCE playlists. 
+                     - Use this for sub-genres, vibes, or contexts.
+                     - EXTRACT ALL descriptive words. Normalize them (e.g. "perrear" -> "perreo").
+                     - Example: User asks for "Reggaeton para perrear" -> strict_genre: "Reggaeton", playlist_keywords: ["perreo", "discoteca", "party", "reggaeton antiguo"].
+                  9. 'action': (Required) One of "create" (new playlist), "add" (append songs), or "modify" (change/remove songs).
                      - If "add", return ONLY the NEW songs in the 'songs' array.
                      - If "create" or "modify", return the COMPLETE playlist.
-                  9. 'failure_format': A NATURAL, VARIED sentence in the USER'S LANGUAGE (${
+                  10. 'failure_format': A NATURAL, VARIED sentence in the USER'S LANGUAGE (${
                     language === "es" ? "Spanish" : "English"
                   }) to apologize for zero results.
                      - Examples: "Couldn't find any {topic} songs right now, sorry.", "No luck finding {topic} tracks this time."
@@ -145,6 +153,7 @@ export async function POST(request: Request) {
                     "topic": "Techno",
                     "target_count": 20,
                     "action": "add",
+                    "playlist_keywords": ["techno bunker", "dark techno"],
                     "partial_success_format": "...",
                     "success_format": "...",
                     "failure_format": "..."
@@ -231,32 +240,136 @@ export async function POST(request: Request) {
           throw new Error("Invalid AI response format");
         }
 
+        console.log(
+          "DEBUG: Raw AI Response:",
+          JSON.stringify(
+            {
+              strict_genre: aiResponse.strict_genre,
+              playlist_keywords: aiResponse.playlist_keywords,
+              topic: aiResponse.topic,
+            },
+            null,
+            2
+          )
+        );
+
         // SANITIZE: Remove malformed entries (missing title/artist) which happen if AI gets "tired"
         aiResponse.songs = aiResponse.songs.filter(
           (s: any) =>
             s &&
             typeof s.title === "string" &&
             typeof s.artist === "string" &&
-            s.title.length > 0 &&
             s.artist.length > 0
         );
+
+        // EXTRA SANITIZATION: Fix "Miky Woodz x Miky Woodz" repetition hallucination
+        aiResponse.songs = aiResponse.songs.map((s: any) => {
+          // 1. Split by common separators (including +)
+          const rawArtists = s.artist.split(
+            /\s+(?:x|ft\.|feat\.|,|&|\+)\s+|\s*[,\+]\s*/i
+          );
+          // 2. Normalize and Deduplicate
+          const seen = new Set<string>();
+          const uniqueArtists: string[] = [];
+
+          for (const a of rawArtists) {
+            let clean = a.trim();
+            // Remove leading/trailing non-alphanumeric chars (like + or - or bullets)
+            clean = clean.replace(/^[^a-zA-Z0-9]+|[^a-zA-Z0-9]+$/g, "");
+
+            if (!clean) continue;
+            const key = clean.toLowerCase();
+            if (!seen.has(key)) {
+              seen.add(key);
+              uniqueArtists.push(clean);
+            }
+          }
+
+          const sanitizedArtist = uniqueArtists.join(", "); // Standardize separator
+
+          // 4. Sanitize Title (Remove leading/trailing + or other garbage)
+          let sanitizedTitle = s.title;
+          if (typeof sanitizedTitle === "string") {
+            sanitizedTitle = sanitizedTitle
+              .trim()
+              .replace(/^[^a-zA-Z0-9]+|[^a-zA-Z0-9]+$/g, "");
+          }
+
+          return { ...s, artist: sanitizedArtist, title: sanitizedTitle };
+        });
 
         console.log(
           `AI generated ${aiResponse.songs.length} VALID songs (Target: ${targetGenCount})`
         );
         if (aiResponse.strict_genre) {
+          // CODE-LEVEL ENFORCEMENT: The AI is stubborn, so we force-clean the genre here.
+          // If genre contains "para", "for", "en", "in" or is > 2 words, we attempt to extracting the first word or clear it.
+          const rawGenre = aiResponse.strict_genre;
+          let cleanedGenre = rawGenre;
+
+          // 1. Remove "para perrear", "in the gym", etc.
+          // Split by common prepositions
+          const parts = rawGenre.split(/\s+(?:para|for|en|in|with|de)\s+/i);
+
+          if (parts.length > 1) {
+            cleanedGenre = parts[0].trim();
+
+            // RECYCLE LOGIC: The parts we removed (e.g. "perrear", "gym") are likely useful keywords.
+            // We should add them to playlist_keywords if they aren't common stops.
+            const removedContext = rawGenre
+              .substring(cleanedGenre.length)
+              .trim();
+            const potentialKeywords = removedContext
+              .split(/\s+/)
+              .filter(
+                (w: string) =>
+                  w.length > 2 &&
+                  ![
+                    "para",
+                    "for",
+                    "en",
+                    "in",
+                    "with",
+                    "de",
+                    "the",
+                    "la",
+                    "el",
+                  ].includes(w.toLowerCase())
+              );
+
+            if (potentialKeywords.length > 0) {
+              if (!aiResponse.playlist_keywords)
+                aiResponse.playlist_keywords = [];
+              // Add unique keywords
+              potentialKeywords.forEach((pk: string) => {
+                const k = pk.replace(/[^a-zA-Z0-9]/g, "").toLowerCase(); // Clean keyword
+                if (k && !aiResponse.playlist_keywords.includes(k)) {
+                  console.log(
+                    `Recycling excluded genre word '${pk}' into playlist_keywords`
+                  );
+                  aiResponse.playlist_keywords.push(k);
+                }
+              });
+            }
+          }
+
+          // 2. If still too long (e.g. "Reggaeton Romantico Antiguo"), take the first 2 words max.
+          const words = cleanedGenre.split(/\s+/);
+          if (words.length > 2) {
+            console.log(
+              `Demoting complex strict_genre '${cleanedGenre}' to simple '${words[0]}'`
+            );
+            cleanedGenre = words[0];
+          }
+
+          // 3. Normalize
+          aiResponse.strict_genre = cleanedGenre.replace(/[^a-zA-Z0-9\s]/g, "");
+
           console.log(
-            `Applying strict genre filter: ${aiResponse.strict_genre} `
+            `Applying strict genre filter: ${aiResponse.strict_genre} (Raw: ${rawGenre})`
           );
         }
 
-        // 2. Search for each song on Spotify with batching and rate limiting
-        const foundTracksRaw: any[] = [];
-        const rejectedSongs: string[] = [];
-        const BATCH_SIZE = 50; // Optimized for Spotify's batch Artist API (max 50)
-        const DELAY_MS = 300;
-
-        // Helper to search with auto-refresh
         const searchWithRetry = async (query: string, limit: number = 1) => {
           try {
             return await spotifyApi.searchTracks(query, { limit });
@@ -265,47 +378,54 @@ export async function POST(request: Request) {
               console.log("Access token expired. Refreshing...");
               spotifyApi.setRefreshToken(refreshToken);
               const data = await spotifyApi.refreshAccessToken();
-              const newAccessToken = data.body["access_token"];
-              spotifyApi.setAccessToken(newAccessToken);
-              console.log("Token refreshed. Retrying search...");
+              spotifyApi.setAccessToken(data.body["access_token"]);
               return await spotifyApi.searchTracks(query, { limit });
             }
             throw error;
           }
         };
 
-        // PRE-FETCH REFERENCE PLAYLIST (if strict genre is requested)
-        const referenceTrackIds = new Set<string>();
+        const referenceTrackMap = new Map<
+          string,
+          { count: number; track: any }
+        >();
+
+        const addRefTrack = (track: any) => {
+          if (!track || !track.id) return;
+          if (referenceTrackMap.has(track.id)) {
+            const entry = referenceTrackMap.get(track.id)!;
+            entry.count += 1;
+          } else {
+            referenceTrackMap.set(track.id, { count: 1, track });
+          }
+        };
+
+        // 1. Fetch by Strict Genre
         if (aiResponse.strict_genre) {
           try {
             console.log(
-              `Fetching reference playlist for genre: ${aiResponse.strict_genre} `
+              `Fetching reference playlist for genre: ${aiResponse.strict_genre}`
             );
-            // Fetch top 5 playlists and pick one randomly
             const playlistSearch = await spotifyApi.searchPlaylists(
               aiResponse.strict_genre,
               { limit: 5 }
             );
             const playlists = playlistSearch.body.playlists?.items || [];
-
             if (playlists.length > 0) {
               const referencePlaylist =
                 playlists[Math.floor(Math.random() * playlists.length)];
               console.log(
                 `Found reference playlist: ${referencePlaylist.name} (ID: ${referencePlaylist.id})`
               );
-
               const playlistTracks = await spotifyApi.getPlaylistTracks(
                 referencePlaylist.id,
                 { limit: 50 }
-              ); // Check top 50 songs
+              );
               playlistTracks.body.items.forEach((item) => {
-                if (item.track) {
-                  referenceTrackIds.add(item.track.id);
-                }
+                if (item.track) addRefTrack(item.track);
               });
               console.log(
-                `Loaded ${referenceTrackIds.size} reference tracks for validation.`
+                `Loaded ${referenceTrackMap.size} reference tracks for validation.`
               );
             }
           } catch (e) {
@@ -313,6 +433,74 @@ export async function POST(request: Request) {
           }
         }
 
+        // 2. Fetch by Playlist Keywords
+        if (
+          aiResponse.playlist_keywords &&
+          Array.isArray(aiResponse.playlist_keywords)
+        ) {
+          const MAX_PLAYLISTS_PER_KEYWORD = 3;
+          for (const keyword of aiResponse.playlist_keywords) {
+            try {
+              const playlistSearch = await spotifyApi.searchPlaylists(keyword, {
+                limit: 10,
+              });
+              const playlists = playlistSearch.body.playlists?.items || [];
+              if (playlists.length > 0) {
+                const validPlaylists = playlists
+                  .filter((p: any) => p !== null)
+                  .slice(0, MAX_PLAYLISTS_PER_KEYWORD);
+                console.log(
+                  `Found ${validPlaylists.length} playlists for keyword '${keyword}'`
+                );
+                for (const pl of validPlaylists) {
+                  try {
+                    const playlistTracks = await spotifyApi.getPlaylistTracks(
+                      pl.id,
+                      { limit: 50 }
+                    );
+                    playlistTracks.body.items.forEach((item) => {
+                      if (item.track) addRefTrack(item.track);
+                    });
+                    console.log(`  -> Loaded tracks from: ${pl.name}`);
+                  } catch (err) {
+                    console.error(`Failed to fetch tracks for ${pl.name}`);
+                  }
+                }
+              }
+            } catch (e) {
+              console.error(`Failed to fetch playlists for ${keyword}`, e);
+            }
+          }
+        }
+
+        const consensusTracks: any[] = [];
+        referenceTrackMap.forEach((value) => {
+          if (value.count >= 2) consensusTracks.push(value.track);
+        });
+
+        const foundTracksRaw: any[] = [];
+        const rejectedSongs: string[] = [];
+
+        if (consensusTracks.length > 0) {
+          console.log(
+            `Found ${consensusTracks.length} CONSENSUS tracks (overlap >= 2). Prioritizing them.`
+          );
+          consensusTracks.forEach((track) => {
+            foundTracksRaw.push({
+              id: track.id,
+              name: track.name,
+              artist: track.artists[0].name,
+              artistId: track.artists[0].id,
+              album: track.album.name,
+              uri: track.uri,
+              image: track.album.images[0]?.url,
+            });
+          });
+        }
+
+        // MAIN BATCH LOOP
+        const BATCH_SIZE = 50;
+        const DELAY_MS = 300;
         const totalBatches = Math.ceil(aiResponse.songs.length / BATCH_SIZE);
 
         for (let i = 0; i < aiResponse.songs.length; i += BATCH_SIZE) {
@@ -326,7 +514,6 @@ export async function POST(request: Request) {
           const batch = aiResponse.songs.slice(i, i + BATCH_SIZE);
           console.log(`Processing batch ${currentBatch}/${totalBatches}`);
 
-          // Process batch in chunks to avoid Rate Limiting (429)
           const CHUNK_SIZE = 5;
           const processedResults: any[] = [];
 
@@ -335,16 +522,12 @@ export async function POST(request: Request) {
             const chunkPromises = chunk.map(
               async (song: { title: string; artist: string }) => {
                 try {
-                  // Collect potential candidates
                   let candidates: any[] = [];
-
-                  // 1. Standard search (Exact Title + Artist)
                   let query = `track:${song.title} artist:${song.artist}`;
                   let searchResult = await searchWithRetry(query, 1);
                   if (searchResult.body.tracks?.items?.length)
                     candidates.push(...searchResult.body.tracks.items);
 
-                  // 2. Fallback: Primary Artist
                   if (
                     candidates.length === 0 &&
                     (song.artist.includes("&") ||
@@ -360,7 +543,6 @@ export async function POST(request: Request) {
                       candidates.push(...searchResult.body.tracks.items);
                   }
 
-                  // 3. Fallback: Title + Genre
                   if (candidates.length === 0 && aiResponse.strict_genre) {
                     query = `${song.title} ${aiResponse.strict_genre}`;
                     searchResult = await searchWithRetry(query, 1);
@@ -368,7 +550,6 @@ export async function POST(request: Request) {
                       candidates.push(...searchResult.body.tracks.items);
                   }
 
-                  // 4. Fallback: Sanitized Title (Remove "The", "A", metadata) + Artist
                   let sanitizedTitle = song.title
                     .replace(/^(The|A|An)\s+/i, "")
                     .replace(/\s*[\(\[\-].*$/i, "")
@@ -379,20 +560,13 @@ export async function POST(request: Request) {
                     sanitizedTitle.length > 2 &&
                     sanitizedTitle !== song.title
                   ) {
-                    console.log(
-                      `Sanitized search: "${sanitizedTitle}" by ${song.artist}`
-                    );
                     query = `track:${sanitizedTitle} artist:${song.artist}`;
                     searchResult = await searchWithRetry(query, 1);
                     if (searchResult.body.tracks?.items?.length)
                       candidates.push(...searchResult.body.tracks.items);
                   }
 
-                  // 5. Fallback: Broad Title Search (finding similar artists)
                   if (candidates.length === 0) {
-                    console.log(
-                      `Deep search for ${song.title} (checking similar artists)...`
-                    );
                     query = `track:${song.title}`;
                     if (sanitizedTitle !== song.title)
                       query = `track:${sanitizedTitle}`;
@@ -403,10 +577,6 @@ export async function POST(request: Request) {
 
                   return { requested: song, candidates };
                 } catch (e: any) {
-                  console.error(
-                    `Failed to search for ${song.title}`,
-                    e.message
-                  );
                   return { requested: song, candidates: [] };
                 }
               }
@@ -414,8 +584,6 @@ export async function POST(request: Request) {
 
             const chunkResults = await Promise.all(chunkPromises);
             processedResults.push(...chunkResults);
-
-            // Small delay between chunks
             await new Promise((r) => setTimeout(r, 200));
           }
 
@@ -431,12 +599,10 @@ export async function POST(request: Request) {
             });
           });
 
-          // Batch Fetch Artists (Max 50)
           let artistMap = new Map<string, any>();
           if (allArtistIds.size > 0) {
             try {
               const ids = Array.from(allArtistIds);
-              // Spotify limits getArtists to 50. Chunk it.
               for (let k = 0; k < ids.length; k += 50) {
                 const chunk = ids.slice(k, k + 50);
                 const artistsResponse = await spotifyApi.getArtists(chunk);
@@ -449,23 +615,18 @@ export async function POST(request: Request) {
             }
           }
 
-          // Validate and Select Best Candidate PER REQUEST
+          // Validate
           batchPromises.forEach(({ requested, candidates }: any) => {
             if (!candidates || candidates.length === 0) {
-              console.log(
-                `Could not find track: ${requested.title} by ${requested.artist}`
-              );
               rejectedSongs.push(`${requested.title} - ${requested.artist}`);
               return;
             }
 
-            // FALLBACK: Use topic if strict_genre is missing to ensure we always filter by something relevant
             const effectiveGenre = aiResponse.strict_genre || aiResponse.topic;
 
             let validCandidates = candidates.map((track: any) => {
               const artist = artistMap.get(track.artists[0].id);
 
-              // 1. Check Genre
               let genreMatch = true;
               if (effectiveGenre && artist) {
                 const normalize = (str: any) => {
@@ -475,8 +636,7 @@ export async function POST(request: Request) {
                     .replace(/[\u0300-\u036f]/g, "")
                     .toLowerCase();
                 };
-                const requestGenre = normalize(effectiveGenre); // Use effectiveGenre
-                // Check artist genres
+                const requestGenre = normalize(effectiveGenre);
                 const hasGenre = artist.genres.some((g: string) => {
                   const artistGenre = normalize(g);
                   return (
@@ -484,11 +644,9 @@ export async function POST(request: Request) {
                     requestGenre.includes(artistGenre)
                   );
                 });
-                // Allow if genre matches OR if it's "Spanish" (generic) and artist has explicit match
                 genreMatch = hasGenre;
               }
 
-              // 2. Check Artist Similarity (Fuzzy)
               const normalize = (str: any) =>
                 typeof str === "string"
                   ? str.toLowerCase().replace(/[^a-z0-9]/g, "")
@@ -499,12 +657,10 @@ export async function POST(request: Request) {
                 reqArtist.includes(trackArtist) ||
                 trackArtist.includes(reqArtist);
 
-              // 3. Check Exact Title Match (Normalized)
               const reqTitle = normalize(requested.title);
               const trackTitle = normalize(track.name);
               const titleMatch = reqTitle === trackTitle;
 
-              // 4. Relaxed Title Match (Substring) - Useful if Spotify has "Song (Remix)" vs "Song"
               const titleMatchRelaxed =
                 trackTitle.includes(reqTitle) || reqTitle.includes(trackTitle);
 
@@ -518,28 +674,19 @@ export async function POST(request: Request) {
               };
             });
 
-            // FILTER Logic
             let bestMatch = null;
 
-            // Priority 1: Genre Match AND (Artist Match OR Title Match)
-            // If we have a genre match, we trust it more.
             if (effectiveGenre) {
               const genreMatches = validCandidates.filter(
-                (c: any) => c.genreMatch || referenceTrackIds.has(c.track.id)
+                (c: any) => c.genreMatch || referenceTrackMap.has(c.track.id)
               );
 
               if (genreMatches.length > 0) {
-                // Pick best among genre matches:
                 bestMatch =
                   genreMatches.find((c: any) => c.artistSimilarity) ||
                   genreMatches.find((c: any) => c.titleMatch) ||
                   genreMatches[0];
               } else {
-                // If NO genre match, try to save it:
-                // 1. Perfect Match (Artist + Exact Title) - High confidence AI was right, Spotify tags missing.
-                // 2. Artist Match + Relaxed Title (e.g. Remix) - Good confidence.
-                // 3. Artist has NO genres - Benefit of doubt.
-
                 const perfectMatch = validCandidates.find(
                   (c: any) =>
                     c.artistSimilarity && (c.titleMatch || c.titleMatchRelaxed)
@@ -553,49 +700,29 @@ export async function POST(request: Request) {
                 );
 
                 if (perfectMatch) {
-                  console.log(
-                    `Genre mismatch for ${requested.title} but found Strong Match (Artist+Title). Accepting.`
-                  );
                   bestMatch = perfectMatch;
                 } else if (emptyGenreCandidate) {
-                  console.log(
-                    `Genre mismatch for ${requested.title} but Artist has NO genres. Giving benefit of doubt.`
-                  );
                   bestMatch = emptyGenreCandidate;
-                } else {
-                  console.log(
-                    `Filtered out ${requested.title}: No candidates matched genre '${effectiveGenre}' and no strong fallback found.`
-                  );
                 }
               }
             } else {
-              // If No Genre Context at all: Require Artist Match OR (Exact Title Match and High Popularity - implicitly first result)
               const artistMatches = validCandidates.filter(
                 (c: any) => c.artistSimilarity
               );
               if (artistMatches.length > 0) {
                 bestMatch = artistMatches[0];
               } else {
-                // Fallback: Exact Title Match if artist didn't match (AI hallucinated artist)
                 const titleMatches = validCandidates.filter(
                   (c: any) => c.titleMatch
                 );
                 if (titleMatches.length > 0) {
-                  console.log(
-                    `Artist mismatch for ${requested.title} (Req: ${requested.artist}), accepting Exact Title Match.`
-                  );
                   bestMatch = titleMatches[0];
-                } else {
-                  console.log(
-                    `Filtered out ${requested.title}: No candidates matched artist '${requested.artist}'`
-                  );
                 }
               }
             }
 
             if (bestMatch) {
               const track = bestMatch.track;
-              // Check for duplicates in CURRENT playlist
               const normalize = (str: any) =>
                 typeof str === "string"
                   ? str
@@ -631,12 +758,10 @@ export async function POST(request: Request) {
             }
           });
 
-          // Send rejected songs update
           if (rejectedSongs.length > 0) {
             send({ type: "rejected", data: rejectedSongs });
           }
 
-          // Delay between batches to respect rate limits
           if (i + BATCH_SIZE < aiResponse.songs.length) {
             await new Promise((resolve) => setTimeout(resolve, DELAY_MS));
           }
@@ -754,6 +879,7 @@ export async function POST(request: Request) {
             tracks: finalTracks,
             topic: aiResponse.topic,
             strict_genre: aiResponse.strict_genre,
+            playlist_keywords: aiResponse.playlist_keywords,
           },
         });
         controller.close();
