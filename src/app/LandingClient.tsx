@@ -17,6 +17,7 @@ export default function LandingClient({ loginUrl }: { loginUrl: string }) {
         // Check for session expired error
         const params = new URLSearchParams(window.location.search);
         if (params.get("error") === "session_expired") {
+            // eslint-disable-next-line react-hooks/set-state-in-effect
             setShowSessionExpired(true);
         }
     }, []);

@@ -23,8 +23,7 @@ export async function POST(request: Request) {
         spotifyApi.setAccessToken(accessToken);
 
         // 1. Get User ID
-        const me = await spotifyApi.getMe();
-        const userId = me.body.id;
+        await spotifyApi.getMe();
 
         // 2. Create Playlist
         const playlist = await spotifyApi.createPlaylist(name, {

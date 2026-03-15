@@ -19,6 +19,7 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
         const browserLang = navigator.language.split('-')[0] as Locale;
         // Check if the language exists in our translations
         if (Object.keys(translations).includes(browserLang)) {
+            // eslint-disable-next-line react-hooks/set-state-in-effect
             setLanguage(browserLang);
         }
     }, []);

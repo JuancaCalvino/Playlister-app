@@ -40,8 +40,6 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const refreshToken = cookieStore.get("spotify_refresh_token")?.value;
-
   const stream = new ReadableStream({
     async start(controller) {
       const encoder = new TextEncoder();
@@ -479,7 +477,7 @@ export async function POST(request: Request) {
                     });
                     console.log(`  -> Loaded tracks from: ${pl.name}`);
                   } catch (err) {
-                    console.error(`Failed to fetch tracks for ${pl.name}`);
+                    console.error(`Failed to fetch tracks for ${pl.name}`, err);
                   }
                 }
               }
@@ -566,7 +564,7 @@ export async function POST(request: Request) {
                       candidates.push(...searchResult.body.tracks.items);
                   }
 
-                  let sanitizedTitle = song.title
+                  const sanitizedTitle = song.title
                     .replace(/^(The|A|An)\s+/i, "")
                     .replace(/\s*[\(\[\-].*$/i, "")
                     .trim();

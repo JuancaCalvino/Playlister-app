@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useMemo } from "react";
-import { Send, Music, Loader2, Play, Plus, X, Trash2, GripVertical, RefreshCw, Search, Sparkles, Disc, CheckCircle2, ExternalLink, Globe, ChevronDown, Check } from "lucide-react";
+import { Send, Music, Loader2, Plus, X, Trash2, GripVertical, RefreshCw, Search, CheckCircle2, ExternalLink, Globe, ChevronDown, Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Reorder } from "framer-motion";
 import { useLanguage } from "@/lib/i18n/context";
@@ -170,6 +170,7 @@ export default function ChatClient() {
         }, 500);
 
         return () => clearTimeout(delayDebounceFn);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [searchQuery]);
 
     const handleSearch = (query: string) => {
@@ -402,7 +403,7 @@ export default function ChatClient() {
             } else {
                 throw new Error("Failed to save");
             }
-        } catch (e) {
+        } catch {
             alert(t('chat.errors.saveFailed'));
             setIsSaving(false);
         }
@@ -449,6 +450,7 @@ export default function ChatClient() {
                                             onClick={() => replaceTrack(track)}
                                             className="w-full flex items-center gap-3 p-3 hover:bg-neutral-700/50 rounded-xl transition-colors group text-left"
                                         >
+                                            {/* eslint-disable-next-line @next/next/no-img-element */}
                                             <img src={track.image} alt={track.album} className="w-12 h-12 rounded-md object-cover shadow-sm" />
                                             <div className="flex-1 min-w-0">
                                                 <div className="font-medium text-white truncate">{track.name}</div>
@@ -708,7 +710,7 @@ export default function ChatClient() {
                         </div>
                         <div className="flex-1 overflow-y-auto p-2 relative [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-track]:bg-neutral-800 [&::-webkit-scrollbar-thumb]:bg-neutral-600 [&::-webkit-scrollbar-thumb]:rounded-full hover:[&::-webkit-scrollbar-thumb]:bg-neutral-500">
                             <Reorder.Group axis="y" values={currentPlaylist} onReorder={setCurrentPlaylist} className="space-y-1">
-                                {currentPlaylist.map((track, i) => (
+                                {currentPlaylist.map((track) => (
                                     <Reorder.Item
                                         key={track.instanceId}
                                         value={track}
@@ -725,6 +727,7 @@ export default function ChatClient() {
                                         </button>
 
                                         {track.image && (
+                                            /* eslint-disable-next-line @next/next/no-img-element */
                                             <img src={track.image} alt={track.album} className="w-10 h-10 rounded-xl shadow-sm select-none pointer-events-none flex-shrink-0" />
                                         )}
                                         <div className="flex-1 min-w-0 select-none">
