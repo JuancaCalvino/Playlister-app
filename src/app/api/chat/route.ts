@@ -1,5 +1,5 @@
 import { openai } from "@/lib/openai";
-import { spotifyApi } from "@/lib/spotify";
+import { spotifyApi, getClientCredentialsApi } from "@/lib/spotify";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
@@ -38,6 +38,10 @@ export async function POST(request: Request) {
       try {
         // Set the access token for this request
         spotifyApi.setAccessToken(accessToken!);
+
+        // Get a Client Credentials API instance for search operations
+        // This bypasses Spotify's March 2026 Development Mode restrictions on user tokens
+        const searchApi = await getClientCredentialsApi();
 
         // Construct the system prompt with context
         const systemPrompt = `You are a helpful music assistant. 
@@ -372,14 +376,12 @@ export async function POST(request: Request) {
 
         const searchWithRetry = async (query: string, limit: number = 1) => {
           try {
-            return await spotifyApi.searchTracks(query, { limit });
+            return await searchApi.searchTracks(query, { limit });
           } catch (error: any) {
-            if (error.statusCode === 401 && refreshToken) {
-              console.log("Access token expired. Refreshing...");
-              spotifyApi.setRefreshToken(refreshToken);
-              const data = await spotifyApi.refreshAccessToken();
-              spotifyApi.setAccessToken(data.body["access_token"]);
-              return await spotifyApi.searchTracks(query, { limit });
+            if (error.statusCode === 401) {
+              console.log("CC token expired. Refreshing...");
+              const newApi = await getClientCredentialsApi();
+              return await newApi.searchTracks(query, { limit });
             }
             throw error;
           }
@@ -406,7 +408,7 @@ export async function POST(request: Request) {
             console.log(
               `Fetching reference playlist for genre: ${aiResponse.strict_genre}`
             );
-            const playlistSearch = await spotifyApi.searchPlaylists(
+            const playlistSearch = await searchApi.searchPlaylists(
               aiResponse.strict_genre,
               { limit: 5 }
             );
@@ -417,7 +419,7 @@ export async function POST(request: Request) {
               console.log(
                 `Found reference playlist: ${referencePlaylist.name} (ID: ${referencePlaylist.id})`
               );
-              const playlistTracks = await spotifyApi.getPlaylistTracks(
+              const playlistTracks = await searchApi.getPlaylistTracks(
                 referencePlaylist.id,
                 { limit: 50 }
               );
@@ -441,7 +443,7 @@ export async function POST(request: Request) {
           const MAX_PLAYLISTS_PER_KEYWORD = 3;
           for (const keyword of aiResponse.playlist_keywords) {
             try {
-              const playlistSearch = await spotifyApi.searchPlaylists(keyword, {
+              const playlistSearch = await searchApi.searchPlaylists(keyword, {
                 limit: 10,
               });
               const playlists = playlistSearch.body.playlists?.items || [];
@@ -454,7 +456,7 @@ export async function POST(request: Request) {
                 );
                 for (const pl of validPlaylists) {
                   try {
-                    const playlistTracks = await spotifyApi.getPlaylistTracks(
+                    const playlistTracks = await searchApi.getPlaylistTracks(
                       pl.id,
                       { limit: 50 }
                     );
@@ -577,6 +579,7 @@ export async function POST(request: Request) {
 
                   return { requested: song, candidates };
                 } catch (e: any) {
+                  console.error(`Status ${e.statusCode} for ${song.title}:`, e.message || 'Forbidden by Spotify API');
                   return { requested: song, candidates: [] };
                 }
               }
@@ -605,7 +608,7 @@ export async function POST(request: Request) {
               const ids = Array.from(allArtistIds);
               for (let k = 0; k < ids.length; k += 50) {
                 const chunk = ids.slice(k, k + 50);
-                const artistsResponse = await spotifyApi.getArtists(chunk);
+                const artistsResponse = await searchApi.getArtists(chunk);
                 artistsResponse.body.artists.forEach((a) =>
                   artistMap.set(a.id, a)
                 );
@@ -622,7 +625,9 @@ export async function POST(request: Request) {
               return;
             }
 
-            const effectiveGenre = aiResponse.strict_genre || aiResponse.topic;
+            // Only use strict_genre for Spotify genre validation.
+            // topic can be multi-word like "Reggaeton Antiguo" which won't match Spotify's genre tags.
+            const effectiveGenre = aiResponse.strict_genre || null;
 
             let validCandidates = candidates.map((track: any) => {
               const artist = artistMap.get(track.artists[0].id);
