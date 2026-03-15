@@ -3,6 +3,20 @@ import { spotifyApi, getClientCredentialsApi } from "@/lib/spotify";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
+interface SpotifyArtistInfo {
+  id: string;
+  name: string;
+  genres: string[];
+}
+
+interface SpotifyTrackInfo {
+  id: string;
+  name: string;
+  uri: string;
+  artists: { id: string; name: string }[];
+  album?: { name: string; images?: { url: string }[] };
+}
+
 export async function POST(request: Request) {
   const {
     message,
@@ -31,7 +45,7 @@ export async function POST(request: Request) {
   const stream = new ReadableStream({
     async start(controller) {
       const encoder = new TextEncoder();
-      const send = (data: any) => {
+      const send = (data: unknown) => {
         controller.enqueue(encoder.encode(JSON.stringify(data) + "\n"));
       };
 
@@ -259,7 +273,7 @@ export async function POST(request: Request) {
 
         // SANITIZE: Remove malformed entries (missing title/artist) which happen if AI gets "tired"
         aiResponse.songs = aiResponse.songs.filter(
-          (s: any) =>
+          (s: { title?: string; artist?: string }) =>
             s &&
             typeof s.title === "string" &&
             typeof s.artist === "string" &&
@@ -267,7 +281,7 @@ export async function POST(request: Request) {
         );
 
         // EXTRA SANITIZATION: Fix "Miky Woodz x Miky Woodz" repetition hallucination
-        aiResponse.songs = aiResponse.songs.map((s: any) => {
+        aiResponse.songs = aiResponse.songs.map((s: { title: string; artist: string }) => {
           // 1. Split by common separators (including +)
           const rawArtists = s.artist.split(
             /\s+(?:x|ft\.|feat\.|,|&|\+)\s+|\s*[,\+]\s*/i
@@ -377,8 +391,8 @@ export async function POST(request: Request) {
         const searchWithRetry = async (query: string, limit: number = 1) => {
           try {
             return await searchApi.searchTracks(query, { limit });
-          } catch (error: any) {
-            if (error.statusCode === 401) {
+          } catch (error: unknown) {
+            if (error && typeof error === 'object' && 'statusCode' in error && (error as { statusCode: number }).statusCode === 401) {
               console.log("CC token expired. Refreshing...");
               const newApi = await getClientCredentialsApi();
               return await newApi.searchTracks(query, { limit });
@@ -389,10 +403,10 @@ export async function POST(request: Request) {
 
         const referenceTrackMap = new Map<
           string,
-          { count: number; track: any }
+          { count: number; track: SpotifyTrackInfo }
         >();
 
-        const addRefTrack = (track: any) => {
+        const addRefTrack = (track: SpotifyTrackInfo) => {
           if (!track || !track.id) return;
           if (referenceTrackMap.has(track.id)) {
             const entry = referenceTrackMap.get(track.id)!;
@@ -449,8 +463,8 @@ export async function POST(request: Request) {
               const playlists = playlistSearch.body.playlists?.items || [];
               if (playlists.length > 0) {
                 const validPlaylists = playlists
-                  .filter((p: any) => p !== null)
-                  .slice(0, MAX_PLAYLISTS_PER_KEYWORD);
+                  .filter((p: { id: string; name: string } | null) => p !== null)
+                  .slice(0, MAX_PLAYLISTS_PER_KEYWORD) as { id: string; name: string }[];
                 console.log(
                   `Found ${validPlaylists.length} playlists for keyword '${keyword}'`
                 );
@@ -475,12 +489,12 @@ export async function POST(request: Request) {
           }
         }
 
-        const consensusTracks: any[] = [];
+        const consensusTracks: SpotifyTrackInfo[] = [];
         referenceTrackMap.forEach((value) => {
           if (value.count >= 2) consensusTracks.push(value.track);
         });
 
-        const foundTracksRaw: any[] = [];
+        const foundTracksRaw: { id: string; name: string; artist: string; artistId: string; album?: string; image?: string; uri: string }[] = [];
         const rejectedSongs: string[] = [];
 
         if (consensusTracks.length > 0) {
@@ -493,9 +507,9 @@ export async function POST(request: Request) {
               name: track.name,
               artist: track.artists[0].name,
               artistId: track.artists[0].id,
-              album: track.album.name,
+              album: track.album?.name,
               uri: track.uri,
-              image: track.album.images[0]?.url,
+              image: track.album?.images?.[0]?.url,
             });
           });
         }
@@ -517,14 +531,14 @@ export async function POST(request: Request) {
           console.log(`Processing batch ${currentBatch}/${totalBatches}`);
 
           const CHUNK_SIZE = 5;
-          const processedResults: any[] = [];
+          const processedResults: { requested: { title: string; artist: string }; candidates: SpotifyTrackInfo[] }[] = [];
 
           for (let j = 0; j < batch.length; j += CHUNK_SIZE) {
             const chunk = batch.slice(j, j + CHUNK_SIZE);
             const chunkPromises = chunk.map(
               async (song: { title: string; artist: string }) => {
                 try {
-                  let candidates: any[] = [];
+                  const candidates: SpotifyTrackInfo[] = [];
                   let query = `track:${song.title} artist:${song.artist}`;
                   let searchResult = await searchWithRetry(query, 1);
                   if (searchResult.body.tracks?.items?.length)
@@ -578,8 +592,9 @@ export async function POST(request: Request) {
                   }
 
                   return { requested: song, candidates };
-                } catch (e: any) {
-                  console.error(`Status ${e.statusCode} for ${song.title}:`, e.message || 'Forbidden by Spotify API');
+                } catch (e: unknown) {
+                  const err = e as { statusCode?: number; message?: string };
+                  console.error(`Status ${err.statusCode} for ${song.title}:`, err.message || 'Forbidden by Spotify API');
                   return { requested: song, candidates: [] };
                 }
               }
@@ -596,13 +611,13 @@ export async function POST(request: Request) {
           // Collect ALL Artist IDs for batch fetching
           const allArtistIds = new Set<string>();
           batchPromises.forEach((res) => {
-            res.candidates.forEach((c: any) => {
+            res.candidates.forEach((c: SpotifyTrackInfo) => {
               if (c.artists && c.artists[0]?.id)
                 allArtistIds.add(c.artists[0].id);
             });
           });
 
-          let artistMap = new Map<string, any>();
+          const artistMap = new Map<string, SpotifyArtistInfo>();
           if (allArtistIds.size > 0) {
             try {
               const ids = Array.from(allArtistIds);
@@ -619,7 +634,7 @@ export async function POST(request: Request) {
           }
 
           // Validate
-          batchPromises.forEach(({ requested, candidates }: any) => {
+          batchPromises.forEach(({ requested, candidates }: { requested: { title: string; artist: string }; candidates: SpotifyTrackInfo[] }) => {
             if (!candidates || candidates.length === 0) {
               rejectedSongs.push(`${requested.title} - ${requested.artist}`);
               return;
@@ -629,12 +644,12 @@ export async function POST(request: Request) {
             // topic can be multi-word like "Reggaeton Antiguo" which won't match Spotify's genre tags.
             const effectiveGenre = aiResponse.strict_genre || null;
 
-            let validCandidates = candidates.map((track: any) => {
+            const validCandidates = candidates.map((track: SpotifyTrackInfo) => {
               const artist = artistMap.get(track.artists[0].id);
 
               let genreMatch = true;
               if (effectiveGenre && artist) {
-                const normalize = (str: any) => {
+                const normalize = (str: unknown) => {
                   if (typeof str !== "string") return "";
                   return str
                     .normalize("NFD")
@@ -652,7 +667,7 @@ export async function POST(request: Request) {
                 genreMatch = hasGenre;
               }
 
-              const normalize = (str: any) =>
+              const normalize = (str: unknown) =>
                 typeof str === "string"
                   ? str.toLowerCase().replace(/[^a-z0-9]/g, "")
                   : "";
@@ -683,22 +698,22 @@ export async function POST(request: Request) {
 
             if (effectiveGenre) {
               const genreMatches = validCandidates.filter(
-                (c: any) => c.genreMatch || referenceTrackMap.has(c.track.id)
+                (c) => c.genreMatch || referenceTrackMap.has(c.track.id)
               );
 
               if (genreMatches.length > 0) {
                 bestMatch =
-                  genreMatches.find((c: any) => c.artistSimilarity) ||
-                  genreMatches.find((c: any) => c.titleMatch) ||
+                  genreMatches.find((c) => c.artistSimilarity) ||
+                  genreMatches.find((c) => c.titleMatch) ||
                   genreMatches[0];
               } else {
                 const perfectMatch = validCandidates.find(
-                  (c: any) =>
+                  (c) =>
                     c.artistSimilarity && (c.titleMatch || c.titleMatchRelaxed)
                 );
 
                 const emptyGenreCandidate = validCandidates.find(
-                  (c: any) =>
+                  (c) =>
                     c.artistSimilarity &&
                     c.artist &&
                     (!c.artist.genres || c.artist.genres.length === 0)
@@ -712,13 +727,13 @@ export async function POST(request: Request) {
               }
             } else {
               const artistMatches = validCandidates.filter(
-                (c: any) => c.artistSimilarity
+                (c) => c.artistSimilarity
               );
               if (artistMatches.length > 0) {
                 bestMatch = artistMatches[0];
               } else {
                 const titleMatches = validCandidates.filter(
-                  (c: any) => c.titleMatch
+                  (c) => c.titleMatch
                 );
                 if (titleMatches.length > 0) {
                   bestMatch = titleMatches[0];
@@ -728,14 +743,14 @@ export async function POST(request: Request) {
 
             if (bestMatch) {
               const track = bestMatch.track;
-              const normalize = (str: any) =>
+              const normalize = (str: unknown) =>
                 typeof str === "string"
                   ? str
                       .toLowerCase()
                       .replace(/[^a-z0-9]/g, "")
                       .trim()
                   : "";
-              const isDuplicateInCurrent = currentPlaylist?.some((p: any) => {
+              const isDuplicateInCurrent = currentPlaylist?.some((p: { id: string; uri: string; title?: string; artist?: string }) => {
                 if (p.id === track.id || p.uri === track.uri) return true;
                 if (p.title && p.artist) {
                   const t1 = normalize(p.title);
@@ -753,9 +768,9 @@ export async function POST(request: Request) {
                   name: track.name,
                   artist: track.artists[0].name,
                   artistId: track.artists[0].id,
-                  album: track.album.name,
+                  album: track.album?.name,
                   uri: track.uri,
-                  image: track.album.images[0]?.url,
+                  image: track.album?.images?.[0]?.url,
                 });
               }
             } else {
@@ -810,7 +825,7 @@ export async function POST(request: Request) {
 
           // Filter existing playlist to exclude any that might have been re-added by AI (unlikely if uniqueTracks are new, but good for safety)
           const existingTracks = currentPlaylist
-            .map((t: any) => ({
+            .map((t: Record<string, string>) => ({
               id: t.id,
               name: t.name || t.title,
               artist: t.artist,
@@ -888,11 +903,12 @@ export async function POST(request: Request) {
           },
         });
         controller.close();
-      } catch (error: any) {
+      } catch (error: unknown) {
+        const err = error as { message?: string };
         console.error("Error in chat API:", error);
         send({
           type: "error",
-          message: error.message || "Internal Server Error",
+          message: err.message || "Internal Server Error",
         });
         controller.close();
       }

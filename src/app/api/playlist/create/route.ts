@@ -33,7 +33,7 @@ export async function POST(request: Request) {
         });
 
         // 3. Add Tracks
-        const trackUris = tracks.map((t: any) => t.uri);
+        const trackUris = tracks.map((t: { uri: string }) => t.uri);
         await spotifyApi.addTracksToPlaylist(playlist.body.id, trackUris);
 
         return NextResponse.json({

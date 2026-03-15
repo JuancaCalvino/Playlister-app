@@ -25,14 +25,20 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
 
     const t = (path: string, params?: Record<string, string | number>) => {
         const keys = path.split('.');
-        let current: any = translations[language];
+        let current: unknown = translations[language];
 
         for (const key of keys) {
-            if (current[key] === undefined) {
-                console.warn(`Translation missing for key: ${path} in language: ${language}`);
-                return path;
+            if (typeof current === 'object' && current !== null && key in current) {
+                current = (current as Record<string, unknown>)[key];
+            } else {
+                current = undefined;
+                break;
             }
-            current = current[key];
+        }
+
+        if (current === undefined) {
+            console.warn(`Translation missing for key: ${path} in language: ${language}`);
+            return path;
         }
 
         if (Array.isArray(current)) {

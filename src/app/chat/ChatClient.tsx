@@ -130,20 +130,20 @@ export default function ChatClient() {
             });
             const data = await res.json();
             if (data.tracks) {
-                const newTracks = data.tracks.map((t: any) => ({ ...t, instanceId: crypto.randomUUID() }));
+                const newTracks = data.tracks.map((t: Omit<Track, 'instanceId'>) => ({ ...t, instanceId: crypto.randomUUID() }));
                 if (offsetVal === 0) {
                     setSearchResults(newTracks);
                 } else {
                     setSearchResults(prev => {
                         const existingIds = new Set(prev.map(t => t.id));
-                        const uniqueNewTracks = newTracks.filter((t: any) => !existingIds.has(t.id));
+                        const uniqueNewTracks = newTracks.filter((t: Track) => !existingIds.has(t.id));
                         return [...prev, ...uniqueNewTracks];
                     });
                 }
                 setHasMore(newTracks.length > 0);
             }
-        } catch (error: any) {
-            if (error.name !== 'AbortError') {
+        } catch (error: unknown) {
+            if (error instanceof Error && error.name !== 'AbortError') {
                 console.error("Search failed", error);
             }
         } finally {
@@ -322,7 +322,7 @@ export default function ChatClient() {
                             // Update the current playlist with the new one from AI
                             if (data.tracks) {
                                 // Assign unique instance IDs to each track
-                                const tracksWithIds = data.tracks.map((t: any) => ({
+                                const tracksWithIds = data.tracks.map((t: Omit<Track, 'instanceId'>) => ({
                                     ...t,
                                     instanceId: crypto.randomUUID()
                                 }));
@@ -350,8 +350,8 @@ export default function ChatClient() {
                     }
                 }
             }
-        } catch (error: any) {
-            if (error.name !== 'AbortError') {
+        } catch (error: unknown) {
+            if (error instanceof Error && error.name !== 'AbortError') {
                 console.error("Error:", error);
                 // Show error in the banner temporarily
                 setLoadingStatusText(error.message || t('chat.errors.generic'));
