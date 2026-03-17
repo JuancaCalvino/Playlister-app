@@ -27,7 +27,7 @@ export const translations = {
     },
     chat: {
       welcome:
-        "Hi! I'm your AI DJ. Tell me what kind of music you're in the mood for.",
+        "Hi! I'm your AI DJ. Tell me what kind of playlist you want to create.",
       inputPlaceholder:
         "Write artists, genres, desired durations, festivals...",
       loading: {
@@ -110,7 +110,7 @@ export const translations = {
     },
     chat: {
       welcome:
-        "¡Hola! Soy tu DJ IA. Dime qué tipo de música te apetece escuchar.",
+        "¡Hola! Soy tu DJ IA. Dime qué tipo de playlist te apetece crear.",
       inputPlaceholder:
         "Escribe artistas, géneros, duraciones deseadas, festivales...",
       loading: {
@@ -193,7 +193,7 @@ export const translations = {
     },
     chat: {
       welcome:
-        "Salut ! Je suis votre DJ IA. Dites-moi ce que vous voulez écouter.",
+        "Salut ! Je suis votre DJ IA. Dites-moi quel genre de playlist vous voulez créer.",
       inputPlaceholder: "Artistes, genres, ambiance, festivals...",
       loading: {
         searching: "Recherche de chansons...",
@@ -274,7 +274,7 @@ export const translations = {
       },
     },
     chat: {
-      welcome: "Hallo! Ich bin dein KI-DJ. Sag mir, worauf du Lust hast.",
+      welcome: "Hallo! Ich bin dein KI-DJ. Sag mir, was für eine Playlist du erstellen möchtest.",
       inputPlaceholder: "Künstler, Genres, Stimmung, Festivals...",
       loading: {
         searching: "Suche nach Songs...",
@@ -353,7 +353,7 @@ export const translations = {
       },
     },
     chat: {
-      welcome: "Ciao! Sono il tuo DJ AI. Dimmi cosa vuoi ascoltare.",
+      welcome: "Ciao! Sono il tuo DJ AI. Dimmi che tipo di playlist vuoi creare.",
       inputPlaceholder: "Artisti, generi, mood, festival...",
       loading: {
         searching: "Cercando canzoni...",
@@ -431,7 +431,7 @@ export const translations = {
       },
     },
     chat: {
-      welcome: "Olá! Sou seu DJ de IA. Diga-me o que você quer ouvir.",
+      welcome: "Olá! Sou seu DJ de IA. Diga-me que tipo de playlist você quer criar.",
       inputPlaceholder: "Artistas, gêneros, humor, festivais...",
       loading: {
         searching: "Procurando músicas...",

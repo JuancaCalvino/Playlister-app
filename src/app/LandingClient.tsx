@@ -1,13 +1,16 @@
 "use client";
 
-import { Music, Globe } from "lucide-react";
+import { Music, Globe, ChevronDown, Check } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useLanguage } from "@/lib/i18n/context";
+import { Locale } from "@/lib/i18n/translations";
+import { cn } from "@/lib/utils";
 
 export default function LandingClient({ loginUrl }: { loginUrl: string }) {
     const { t, language, setLanguage } = useLanguage();
 
     const [showSessionExpired, setShowSessionExpired] = useState(false);
+    const [isLanguageOpen, setIsLanguageOpen] = useState(false);
 
     useEffect(() => {
         if (window.location.hostname === "localhost") {
@@ -22,9 +25,7 @@ export default function LandingClient({ loginUrl }: { loginUrl: string }) {
         }
     }, []);
 
-    const toggleLanguage = () => {
-        setLanguage(language === 'en' ? 'es' : 'en');
-    };
+
 
     const handleDismiss = () => {
         setShowSessionExpired(false);
@@ -62,14 +63,48 @@ export default function LandingClient({ loginUrl }: { loginUrl: string }) {
                 </div>
             )}
 
-            {/* Language Toggle */}
-            <button
-                onClick={toggleLanguage}
-                className="absolute top-4 right-4 flex items-center gap-2 px-4 py-2 rounded-full bg-neutral-800 hover:bg-neutral-700 transition-colors text-sm font-medium"
-            >
-                <Globe className="w-4 h-4" />
-                {language.toUpperCase()}
-            </button>
+            {/* Language Selector */}
+            {isLanguageOpen && (
+                <div className="fixed inset-0 z-40" onClick={() => setIsLanguageOpen(false)} />
+            )}
+            <div className="absolute top-4 right-4 z-50">
+                <button
+                    onClick={() => setIsLanguageOpen(!isLanguageOpen)}
+                    className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-neutral-800 hover:bg-neutral-700 transition-colors text-xs font-medium text-gray-300 hover:text-white border border-transparent hover:border-neutral-600"
+                >
+                    <Globe className="w-3 h-3" />
+                    <span className="uppercase">{language}</span>
+                    <ChevronDown className={cn("w-3 h-3 transition-transform", isLanguageOpen ? "rotate-180" : "")} />
+                </button>
+
+                {isLanguageOpen && (
+                    <div className="absolute right-0 top-full mt-2 w-40 bg-neutral-800 rounded-xl shadow-xl border border-neutral-700 overflow-hidden z-50 animate-in fade-in zoom-in-95 duration-200">
+                        {([
+                            { code: 'en', label: 'English' },
+                            { code: 'es', label: 'Español' },
+                            { code: 'fr', label: 'Français' },
+                            { code: 'de', label: 'Deutsch' },
+                            { code: 'it', label: 'Italiano' },
+                            { code: 'pt', label: 'Português' },
+                        ] as { code: Locale, label: string }[]).map((lang) => (
+                            <button
+                                key={lang.code}
+                                onClick={() => {
+                                    setLanguage(lang.code);
+                                    setIsLanguageOpen(false);
+                                }}
+                                className={cn(
+                                    "w-full text-left px-4 py-2.5 text-xs font-medium hover:bg-neutral-700 transition-colors flex items-center justify-between",
+                                    language === lang.code ? "text-green-500 bg-green-500/10" : "text-gray-300"
+                                )}
+                            >
+                                {lang.label}
+                                {language === lang.code && <Check className="w-3 h-3" />}
+                            </button>
+                        ))}
+                    </div>
+                )}
+            </div>
 
             <div className="flex flex-col items-center space-y-8 text-center max-w-md">
                 <div className="p-4 bg-green-500 rounded-full bg-opacity-20 animate-pulse">
