@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useMemo } from "react";
-import { Send, Music, Loader2, Plus, X, Trash2, GripVertical, RefreshCw, Search, CheckCircle2, ExternalLink, Globe, ChevronDown, Check } from "lucide-react";
+import { Send, Music, Loader2, Plus, X, Trash2, GripVertical, RefreshCw, Search, CheckCircle2, ExternalLink, Globe, ChevronDown, Check, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Reorder } from "framer-motion";
 import { useLanguage } from "@/lib/i18n/context";
@@ -72,6 +72,10 @@ export default function ChatClient() {
 
     // Delete Confirmation Modal State
     const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+    
+    // Error Modal State
+    const [isErrorModalOpen, setIsErrorModalOpen] = useState(false);
+    const [errorMessage, setErrorMessage] = useState("");
     
     // Language Dropdown State
     const [isLanguageOpen, setIsLanguageOpen] = useState(false);
@@ -404,7 +408,8 @@ export default function ChatClient() {
                 throw new Error("Failed to save");
             }
         } catch {
-            alert(t('chat.errors.saveFailed'));
+            setErrorMessage(t('chat.errors.saveFailed'));
+            setIsErrorModalOpen(true);
             setIsSaving(false);
         }
     };
@@ -587,6 +592,28 @@ export default function ChatClient() {
                             <button
                                 onClick={() => setIsSuccessModalOpen(false)}
                                 className="w-full py-3 rounded-full font-medium text-gray-300 hover:text-white hover:bg-neutral-700 transition-colors"
+                            >
+                                {t('chat.successModal.close')}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Error Modal */}
+            {isErrorModalOpen && (
+                <div className="absolute inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+                    <div className="bg-neutral-800 w-full max-w-md rounded-3xl p-8 shadow-2xl border border-neutral-700 animate-in fade-in zoom-in-95 duration-200 text-center">
+                        <div className="w-16 h-16 bg-red-500/20 rounded-full flex items-center justify-center mx-auto mb-6">
+                            <AlertCircle className="w-8 h-8 text-red-500" />
+                        </div>
+                        <h3 className="font-bold text-2xl text-white mb-2">Error</h3>
+                        <p className="text-gray-400 mb-8">{errorMessage}</p>
+
+                        <div className="flex flex-col gap-3">
+                            <button
+                                onClick={() => setIsErrorModalOpen(false)}
+                                className="w-full py-3 bg-neutral-700 text-white font-bold rounded-full hover:bg-neutral-600 transition-all flex items-center justify-center"
                             >
                                 {t('chat.successModal.close')}
                             </button>
