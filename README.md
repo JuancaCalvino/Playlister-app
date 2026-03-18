@@ -2,7 +2,7 @@
 
 [![Frontend](https://img.shields.io/badge/Frontend-Next.js_16-000000?style=flat&logo=next.js&logoColor=white)](https://nextjs.org/)
 [![Language](https://img.shields.io/badge/Language-TypeScript-3178C6?style=flat&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![AI](https://img.shields.io/badge/AI-OpenAI_GPT--4o-412991?style=flat&logo=openai&logoColor=white)](https://platform.openai.com/)
+[![AI](https://img.shields.io/badge/AI-OpenAI_GPT--4o_mini-412991?style=flat&logo=openai&logoColor=white)](https://platform.openai.com/)
 [![API](https://img.shields.io/badge/API-Spotify_Web_API-1DB954?style=flat&logo=spotify&logoColor=white)](https://developer.spotify.com/)
 
 A web application that creates the perfect Spotify playlist for any mood, vibe, or moment — powered by conversational AI.
