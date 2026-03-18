@@ -104,11 +104,12 @@ export async function POST(request: Request) {
                   6. NO DUPLICATES. Check the 'CURRENT PLAYLIST CONTEXT' above. Do NOT suggest any song that pairs with those Titles+Artists. Ensure every song is unique.
                   7. RANDOMNESS: Randomize the order of the songs. Do NOT output them in popularity order.
                   
-                  You must return a JSON object with EIGHT fields:
+                  You must return a JSON object with TEN fields:
                   1. 'message': A short, friendly response to the user (assuming all songs are found) IN THE USER'S LANGUAGE (${
                     language === "es" ? "Spanish" : "English"
                   }).
-                  2. 'songs': An array of song objects, each with 'title' and 'artist'. 
+                  2. 'songs': An array of song objects, each with 'title', 'artist', and 'reasoning'. 
+                     - 'reasoning': A brief explanation of why this song fits the exact requested genre or context to enforce coherence.
                      - CRITICAL: THIS ARRAY MUST BE 2x THE SIZE OF THE USER REQUEST. (e.g. if user wants 20, generate 40).
                      - DEPTH & VARIETY: For large specific requests (e.g. "100 Rap songs"), you MUST include MULTIPLE hits (2-5) from the genre's KEY artists. 
                      - Example: For "Spanish Rap", include 3-4 songs each by Nach, SFDK, Kase.O, Violadores del Verso, etc. Don't just pick one.
@@ -162,13 +163,17 @@ export async function POST(request: Request) {
                      - Examples: "Couldn't find any {topic} songs right now, sorry.", "No luck finding {topic} tracks this time."
                      - It MUST contain the placeholder "{topic}".
                   
-                  Example JSON format:
+                  OUTPUT EXAMPLE:
+                  User: "30 min de techno"
                   {
-                    "message": "Aquí tienes...",
-                    "songs": [ ... ],
+                    "message": "¡Claro! He preparado una sesión de techno de 30 minutos...",
+                    "songs": [
+                      {"title": "Spacelift", "artist": "Len Faki", "reasoning": "Es un track icónico de techno puro"},
+                      {"title": "Domino", "artist": "Oxia", "reasoning": "Clásico del techno melódico"}
+                    ],
                     "topic": "Techno",
-                    "target_count": 20,
-                    "action": "add",
+                    "target_count": 9,
+                    "action": "create",
                     "playlist_keywords": ["techno bunker", "dark techno"],
                     "partial_success_format": "...",
                     "success_format": "...",
@@ -218,20 +223,20 @@ export async function POST(request: Request) {
         const enforcedMessage = `${message} (IMPORTANT SYSTEM INSTRUCTION: User wants ${requestedCount} songs. You MUST generate exactly ${targetGenCount} unique songs in the JSON to allow for filtering. Do NOT stop early. Generate ${targetGenCount} items.)`;
 
         const completion = await openai.chat.completions.create({
-          model: "gpt-4o",
-          temperature: 0.7,
+          model: "gpt-4o-mini",
+          temperature: 0.4,
           messages: [
             {
               role: "system",
               content:
                 systemPrompt +
-                `\n\nCRITICAL: User requested ${requestedCount} songs. You MUST generate a list of ${targetGenCount} songs. Do not be lazy. Fill the array.`,
+                `\n\nCRITICAL: User requested ${requestedCount} songs. If the user context is large, DO NOT truncate the song list. You MUST provide the full array of ${targetGenCount} items. Do not be lazy. Fill the array.`,
             },
             { role: "user", content: enforcedMessage },
           ],
           response_format: { type: "json_object" },
           max_tokens: 16384,
-          frequency_penalty: 0.2,
+          frequency_penalty: 0.3,
         });
 
         let aiResponse;
